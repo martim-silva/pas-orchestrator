@@ -1,0 +1,166 @@
+---
+# import_pvwa_certificate.yml
+#
+# This task imports the PVWA SSL certificate into the local machine's certificate
+# store of CPM and PSM components, ensuring all components trust the same certificate.
+#
+# The certificate is retrieved from the PVWA host and imported into both the
+# personal and root certificate stores.
+
+- name: Resolve PVWA certificate source metadata from hostvars
+  ansible.builtin.set_fact:
+    pvwa_cert_source_host: "{{ groups['pvwa'][0] }}"
+    pvwa_cert_source_export_path: >-
+      {{
+        hostvars[groups['pvwa'][0]]['pvwa_certificate_export_path']
+        | default('C:\\Cyberark\\certs\\pvwa-cert.pem')
+      }}
+    pvwa_cert_source_thumbprint: >-
+      {{
+        hostvars[groups['pvwa'][0]]['pvwa_certificate_thumbprint']
+        | default('')
+      }}
+  when:
+    - groups['pvwa'] is defined
+    - groups['pvwa'] | length > 0
+
+- name: Fail when PVWA certificate metadata is unavailable
+  ansible.builtin.fail:
+    msg: >-
+      PVWA certificate metadata is unavailable. Ensure the PVWA provisioning-side
+      certificate task completed successfully before importing into {{ inventory_hostname }}.
+  when:
+    - pvwa_cert_source_host is not defined
+      or (pvwa_cert_source_thumbprint | default('') | length == 0)
+
+- name: Get PVWA certificate from PVWA host
+  ansible.windows.win_shell: |
+    $pvwaCertPath = "{{ pvwa_cert_source_export_path }}"
+    if (Test-Path -Path $pvwaCertPath) {
+      Get-Content -Path $pvwaCertPath -Raw
+      exit 0
+    } else {
+      Write-Error "Cannot find certificate at $pvwaCertPath"
+      exit 1
+    }
+  args:
+    executable: powershell
+  register: pvwa_cert_content_raw
+  delegate_to: "{{ pvwa_cert_source_host }}"
+  run_once: yes
+  when: pvwa_cert_source_host is defined
+
+- name: Fail when PVWA certificate content is unavailable for import
+  ansible.builtin.fail:
+    msg: >-
+      PVWA certificate export was not readable from {{ pvwa_cert_source_host }} at
+      {{ pvwa_cert_source_export_path }}.
+      Ensure PVWA certificate provisioning ran successfully first.
+  when:
+    - pvwa_cert_content_raw is not defined or pvwa_cert_content_raw.rc != 0 or (pvwa_cert_content_raw.stdout | default('') | length == 0)
+
+- name: Set certificate content fact for import
+  ansible.builtin.set_fact:
+    pvwa_cert_pem_content: "{{ pvwa_cert_content_raw.stdout }}"
+  when:
+    - pvwa_cert_content_raw is succeeded
+    - pvwa_cert_content_raw.stdout | length > 0
+
+- name: Import PVWA certificate into local certificate stores
+  ansible.windows.win_powershell:
+    parameters:
+      CertPemContent: "{{ pvwa_cert_pem_content | default('') }}"
+      CertThumbprint: "{{ pvwa_cert_source_thumbprint }}"
+    script: |
+      param(
+        [string] $CertPemContent,
+        [string] $CertThumbprint
+      )
+
+      $ErrorActionPreference = 'Stop'
+      $Ansible.Changed = $false
+
+      try {
+        if ([string]::IsNullOrWhiteSpace($CertThumbprint)) {
+          throw "PVWA certificate thumbprint is not available"
+        }
+
+        # Check if certificate already exists in LocalMachine\My
+        $existingCert = Get-ChildItem -Path 'Cert:\LocalMachine\My' -ErrorAction SilentlyContinue |
+          Where-Object { $_.Thumbprint -eq $CertThumbprint }
+
+        if ($existingCert) {
+          Write-Output "Certificate already installed in LocalMachine\My"
+          $cert = $existingCert
+        }
+        else {
+          # Import from PEM content
+          if (-not [string]::IsNullOrWhiteSpace($CertPemContent)) {
+            # Create temporary file for certificate
+            $tempFile = [System.IO.Path]::ChangeExtension([System.IO.Path]::GetTempFileName(), '.pem')
+            Set-Content -Path $tempFile -Value $CertPemContent -Encoding Ascii
+
+            try {
+              # Import certificate into LocalMachine\My
+              $cert = Import-Certificate -FilePath $tempFile -CertStoreLocation 'Cert:\LocalMachine\My' -ErrorAction Stop
+
+              if ($cert.Thumbprint -ne $CertThumbprint) {
+                Write-Warning "Imported certificate thumbprint does not match PVWA thumbprint"
+              }
+
+              $Ansible.Changed = $true
+              Write-Output "Certificate imported successfully"
+            }
+            finally {
+              Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+            }
+          }
+          else {
+            throw "Certificate PEM content is empty"
+          }
+        }
+
+        # Trust the certificate locally if not already trusted (LocalMachine\Root)
+        $rootStore = Get-Item 'Cert:\LocalMachine\Root'
+        $rootStore.Open('ReadWrite')
+
+        $alreadyTrusted = $rootStore.Certificates |
+          Where-Object { $_.Thumbprint -eq $CertThumbprint }
+
+        if (-not $alreadyTrusted) {
+          $rootStore.Add($cert)
+          $Ansible.Changed = $true
+          Write-Output "Certificate added to LocalMachine\Root (trusted)"
+        }
+        else {
+          Write-Output "Certificate already trusted in LocalMachine\Root"
+        }
+
+        $rootStore.Close()
+
+        $Ansible.Result = @{
+          cert_thumbprint = $CertThumbprint
+          cert_subject    = $cert.Subject
+          import_status   = 'success'
+          newly_imported  = $Ansible.Changed
+        }
+      }
+      catch {
+        throw "Failed to import PVWA certificate: $_"
+      }
+  register: pvwa_cert_import
+  retries: 3
+  delay: 10
+  until: pvwa_cert_import is succeeded
+  when:
+    - pvwa_cert_pem_content is defined
+    - pvwa_cert_pem_content | length > 0
+
+- name: Report PVWA certificate import result
+  ansible.builtin.debug:
+    msg: >-
+      PVWA certificate imported on {{ inventory_hostname }}: thumbprint
+      {{ pvwa_cert_import.result.cert_thumbprint }}, subject
+      {{ pvwa_cert_import.result.cert_subject }}
+  when: pvwa_cert_import is succeeded
+

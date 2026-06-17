@@ -52,6 +52,9 @@
 
   tasks:
 
+    - name: Enable IIS prerequisites on component hosts
+      include_tasks: enable_iis.yml
+
     - include_tasks: cpm.yml
       when: "'cpm' in group_names"
     - include_tasks: pvwa.yml

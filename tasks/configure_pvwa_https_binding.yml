@@ -1,0 +1,216 @@
+---
+# configure_pvwa_https_binding.yml
+#
+# Windows 11 (client SKU) compatible port of the vendor PVWA prerequisite step
+# "PVWA_ConfigSelfCertificat" (InstallationAutomation/PVWA_Prerequisites).
+#
+# Why this exists:
+#   The vendor RunPVWAPrerequisites.ps1 cannot run as-is on Windows 10/11 client
+#   editions because two of its steps rely on the Server-only ServerManager
+#   cmdlets:
+#     * PVWA_InstallWebServerRoles  -> Add-WindowsFeaturesOrRoles ->
+#       Test-CAInstalledRole -> Get-WindowsFeature / Install-WindowsFeature
+#     * PVWA_Verify_IIS_Settings    -> Get-WindowsFeature Web-Server
+#   Those cmdlets do not exist on client SKUs, so the whole prerequisites stage
+#   fails. Our flow therefore enables IIS via DISM/win_optional_feature
+#   (enable_iis.yml) and reproduces the still-required cert + HTTPS binding here.
+#
+#   The CyberArk PVWA installer aborts with:
+#     "https binding is not configured for website (Default Web Site)
+#      (Port:80;ID:1). Please configure https binding for this website..."
+#   unless the Default Web Site has an HTTPS (443) binding with a certificate.
+#
+# This task mirrors the vendor PVWA_ConfigSelfCertificat behavior in an
+# idempotent way: FQDN-based self-signed cert (SSLServerAuthentication with a
+# fallback), 30-year validity, trusted in LocalMachine\Root, an HTTPS site
+# binding, the http.sys SSL binding, the URL ACL, and the inbound firewall rule.
+
+- name: Ensure IIS HTTPS binding is configured for the Default Web Site
+  ansible.windows.win_powershell:
+    parameters:
+      SiteName: "{{ pvwa_iis_site_name | default('Default Web Site') }}"
+      HttpsPort: "{{ pvwa_iis_https_port | default(443) | int }}"
+    script: |
+      param(
+        [string] $SiteName,
+        [int]    $HttpsPort
+      )
+
+      $ErrorActionPreference = 'Stop'
+      $Ansible.Changed = $false
+
+      Import-Module WebAdministration -ErrorAction Stop
+
+      # Match the vendor Get-DnsHost: the machine FQDN. Fall back to the short
+      # name if DNS resolution is unavailable during provisioning.
+      try {
+        $dnsHost = ([System.Net.Dns]::GetHostByName($env:COMPUTERNAME)).HostName
+      } catch {
+        $dnsHost = $env:COMPUTERNAME
+      }
+      if ([string]::IsNullOrWhiteSpace($dnsHost)) { $dnsHost = $env:COMPUTERNAME }
+
+      # The Default Web Site must exist before we can bind HTTPS to it.
+      $site = Get-Item "IIS:\Sites\$SiteName" -ErrorAction SilentlyContinue
+      if (-not $site) {
+        throw "IIS site '$SiteName' was not found. Ensure IIS and the Default Web Site are installed (enable_iis.yml) before configuring the HTTPS binding."
+      }
+
+      # Reuse a valid self-signed certificate for this DnsHost, otherwise create
+      # one. Mirrors the vendor step: SSLServerAuthentication with a fallback for
+      # older platforms, 30-year expiry.
+      $cert = Get-ChildItem Cert:\LocalMachine\My |
+        Where-Object { $_.Subject -eq "CN=$dnsHost" -and $_.NotAfter -gt (Get-Date) } |
+        Sort-Object NotAfter -Descending |
+        Select-Object -First 1
+
+      if (-not $cert) {
+        $notAfter = (Get-Date).AddYears(30)
+        try {
+          $cert = New-SelfSignedCertificate -DnsName $dnsHost -Type SSLServerAuthentication -CertStoreLocation 'Cert:\LocalMachine\My' -NotAfter $notAfter
+        } catch {
+          # Fallback for platforms that do not support the -Type/-NotAfter params.
+          $cert = New-SelfSignedCertificate -DnsName $dnsHost -CertStoreLocation 'Cert:\LocalMachine\My'
+        }
+        $Ansible.Changed = $true
+      }
+
+      # Trust the self-signed cert locally (LocalMachine\Root), like the vendor.
+      $rootStore = Get-Item Cert:\LocalMachine\Root
+      $rootStore.Open('ReadWrite')
+      $alreadyTrusted = $rootStore.Certificates | Where-Object { $_.Thumbprint -eq $cert.Thumbprint }
+      if (-not $alreadyTrusted) {
+        $rootStore.Add($cert)
+        $Ansible.Changed = $true
+      }
+      $rootStore.Close()
+
+      # Reserve the HTTPS URL ACL for the site (idempotent).
+      $aclShow = & netsh http show urlacl url="https://localhost:$HttpsPort/" 2>$null | Out-String
+      if ($aclShow -notmatch [regex]::Escape("https://localhost:$HttpsPort/")) {
+        & netsh http add urlacl url="https://localhost:$HttpsPort/" user=Everyone | Out-Null
+        $Ansible.Changed = $true
+      }
+
+      # Ensure an inbound firewall rule for the HTTPS port (vendor intent, fixed
+      # to actually create the rule when missing).
+      if (-not (Get-NetFirewallRule -DisplayName 'HTTPS' -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName 'HTTPS' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $HttpsPort | Out-Null
+        $Ansible.Changed = $true
+      }
+
+      # Ensure an HTTPS site binding exists on the requested port.
+      $httpsBinding = Get-WebBinding -Name $SiteName -Protocol https -ErrorAction SilentlyContinue |
+        Where-Object { $_.bindingInformation -like "*:$($HttpsPort):*" }
+
+      if (-not $httpsBinding) {
+        New-WebBinding -Name $SiteName -IPAddress '*' -Port $HttpsPort -Protocol https
+        $Ansible.Changed = $true
+      }
+
+      # Bind the certificate to 0.0.0.0:<port> in http.sys via IIS:\SslBindings so
+      # the HTTPS endpoint actually serves the certificate.
+      $sslPath = "IIS:\SslBindings\0.0.0.0!$HttpsPort"
+      $existingSsl = Get-Item $sslPath -ErrorAction SilentlyContinue
+
+      if (-not $existingSsl) {
+        New-Item -Path $sslPath -Thumbprint $cert.Thumbprint -SSLFlags 0 | Out-Null
+        $Ansible.Changed = $true
+      }
+      elseif ($existingSsl.Thumbprint -ne $cert.Thumbprint) {
+        Remove-Item $sslPath -Force
+        New-Item -Path $sslPath -Thumbprint $cert.Thumbprint -SSLFlags 0 | Out-Null
+        $Ansible.Changed = $true
+      }
+
+      $Ansible.Result = @{
+        site            = $SiteName
+        https_port      = $HttpsPort
+        dns_host        = $dnsHost
+        cert_thumbprint = $cert.Thumbprint
+        cert_subject    = $cert.Subject
+      }
+  register: pvwa_https_binding
+  retries: 3
+  delay: 10
+  until: pvwa_https_binding is succeeded
+
+- name: Report PVWA HTTPS binding result
+  ansible.builtin.debug:
+    msg: >-
+      HTTPS binding ready on '{{ pvwa_https_binding.result.site }}' port
+      {{ pvwa_https_binding.result.https_port }} for host
+      {{ pvwa_https_binding.result.dns_host }} using certificate
+      {{ pvwa_https_binding.result.cert_subject }}
+      (thumbprint {{ pvwa_https_binding.result.cert_thumbprint }}).
+
+# ── SSL Certificate Export for Distribution to CPM/PSM ──────────────────────
+
+- name: Export PVWA SSL certificate to PEM file for distribution
+  ansible.windows.win_powershell:
+    parameters:
+      CertThumbprint: "{{ pvwa_https_binding.result.cert_thumbprint }}"
+      ExportPath: "{{ pvwa_cert_export_path | default('C:\\Cyberark\\certs\\pvwa-cert.pem') }}"
+    script: |
+      param(
+        [string] $CertThumbprint,
+        [string] $ExportPath
+      )
+
+      $ErrorActionPreference = 'Stop'
+      $Ansible.Changed = $false
+
+      try {
+        # Ensure export directory exists
+        $exportDir = Split-Path -Path $ExportPath
+        if (-not (Test-Path -Path $exportDir)) {
+          New-Item -ItemType Directory -Path $exportDir -Force | Out-Null
+          $Ansible.Changed = $true
+        }
+
+        # Retrieve the certificate by thumbprint
+        $cert = Get-ChildItem -Path 'Cert:\LocalMachine\My' |
+          Where-Object { $_.Thumbprint -eq $CertThumbprint }
+
+        if (-not $cert) {
+          throw "Certificate with thumbprint $CertThumbprint was not found in LocalMachine\My"
+        }
+
+        # Export the public key to PEM format
+        $content = @(
+          '-----BEGIN CERTIFICATE-----'
+          [System.Convert]::ToBase64String($cert.RawData, 'InsertLineBreaks')
+          '-----END CERTIFICATE-----'
+        )
+
+        $content | Out-File -FilePath $ExportPath -Encoding ASCII -Force
+        $Ansible.Changed = $true
+
+        $Ansible.Result = @{
+          export_path     = $ExportPath
+          cert_thumbprint = $CertThumbprint
+          cert_subject    = $cert.Subject
+          export_status   = 'success'
+        }
+      }
+      catch {
+        throw "Failed to export certificate: $_"
+      }
+  register: pvwa_cert_export
+  retries: 3
+  delay: 5
+  until: pvwa_cert_export is succeeded
+
+- name: Store PVWA certificate metadata as fact for other components
+  ansible.builtin.set_fact:
+    pvwa_certificate_thumbprint: "{{ pvwa_https_binding.result.cert_thumbprint }}"
+    pvwa_certificate_subject: "{{ pvwa_https_binding.result.cert_subject }}"
+    pvwa_certificate_export_path: "{{ pvwa_cert_export.result.export_path }}"
+    cacheable: yes
+
+- name: Report PVWA certificate export result
+  ansible.builtin.debug:
+    msg: >-
+      Certificate exported to {{ pvwa_cert_export.result.export_path }} with
+      thumbprint {{ pvwa_cert_export.result.cert_thumbprint }}
+

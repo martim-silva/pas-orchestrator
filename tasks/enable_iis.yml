@@ -1,0 +1,103 @@
+---
+
+- name: Detect Windows edition family from gathered facts
+  ansible.builtin.set_fact:
+    iis_is_server_sku: >-
+      {{ (ansible_facts.os_product_type | default('') | lower) in ['server', 'domain_controller'] }}
+
+- name: Enable IIS features on Windows client editions (Windows 10/11)
+  when: not iis_is_server_sku
+  block:
+    - name: Enable IIS Web Server role
+      ansible.windows.win_optional_feature:
+        name: IIS-WebServerRole
+        state: present
+      register: iis_web_role
+
+    - name: Enable .NET 4.x optional-feature prerequisites for IIS ASP.NET
+      ansible.windows.win_optional_feature:
+        name: "{{ item }}"
+        state: present
+        include_parent: true
+      loop:
+        - NetFx4-AdvSrvs
+        - NetFx4Extended-ASPNET45
+      register: iis_dotnet_features
+
+    - name: Enable required IIS sub-features
+      ansible.windows.win_optional_feature:
+        name: "{{ item }}"
+        state: present
+        include_parent: true
+      loop:
+        # Ordered so parent features precede dependent children.
+        - IIS-WebServer
+        - IIS-CommonHttpFeatures
+        - IIS-DefaultDocument
+        - IIS-DirectoryBrowsing
+        - IIS-HttpErrors
+        - IIS-StaticContent
+        - IIS-ApplicationDevelopment
+        - IIS-ISAPIExtensions
+        - IIS-ISAPIFilter
+        - IIS-NetFxExtensibility45
+        - IIS-ASPNET45
+        - IIS-WebServerManagementTools
+        - IIS-ManagementConsole
+        - IIS-ManagementScriptingTools
+      register: iis_sub_features
+
+    - name: Enable and start Windows Activation Service (WAS)
+      ansible.windows.win_service:
+        name: WAS
+        state: started
+        start_mode: auto
+      register: was_service
+
+    - name: Enable and start World Wide Web Publishing Service (W3SVC)
+      ansible.windows.win_service:
+        name: W3SVC
+        state: started
+        start_mode: auto
+      register: w3svc_service
+
+- name: Enable IIS features on Windows Server editions
+  when: iis_is_server_sku
+  block:
+    - name: Enable IIS and .NET prerequisites via Server Manager
+      ansible.windows.win_feature:
+        name:
+          - Web-Server
+          - NET-Framework-45-Core
+          - NET-Framework-45-ASPNET
+          - Web-Common-Http
+          - Web-Default-Doc
+          - Web-Dir-Browsing
+          - Web-Http-Errors
+          - Web-Static-Content
+          - Web-App-Dev
+          - Web-Net-Ext45
+          - Web-Asp-Net45
+          - Web-ISAPI-Ext
+          - Web-ISAPI-Filter
+          - Web-Mgmt-Console
+          - Web-Scripting-Tools
+        state: present
+        include_sub_features: true
+      register: iis_server_features
+
+- name: Reboot after IIS feature enablement when required
+  ansible.windows.win_reboot:
+    reboot_timeout: 3600
+  when: >-
+    (iis_web_role.reboot_required | default(false)) or
+    ((iis_dotnet_features.results | default([])
+      | selectattr('reboot_required', 'defined')
+      | selectattr('reboot_required')
+      | list | length) > 0) or
+    ((iis_sub_features.results | default([])
+      | selectattr('reboot_required', 'defined')
+      | selectattr('reboot_required')
+      | list | length) > 0) or
+    (iis_server_features.reboot_required | default(false))
+

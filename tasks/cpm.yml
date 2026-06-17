@@ -1,12 +1,15 @@
 ---
 
+- name: Import PVWA SSL certificate into CPM
+  ansible.builtin.include_tasks: import_pvwa_certificate.yml
+
 - include_role:
     name: cpm
   vars:
-    - cpm_extract: true
-    - cpm_prerequisites: true
-    - cpm_install: true
-    - cpm_postinstall: true
-    - cpm_hardening: true
-    - cpm_registration: false
-    - cpm_official: false
+    cpm_extract: true
+    cpm_prerequisites: true
+    cpm_install: true
+    cpm_postinstall: true
+    cpm_hardening: true
+    cpm_registration: false
+    cpm_official: false

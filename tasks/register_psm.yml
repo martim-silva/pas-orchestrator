@@ -4,4 +4,4 @@
   include_role:
     name: psm
   vars:
-    - psm_registration: true
+    psm_registration: true

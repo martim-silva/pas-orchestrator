@@ -1,0 +1,77 @@
+---
+
+- name: Ensure PVWA web.config contains at least CyberArk authentication method
+  ansible.windows.win_shell: |
+    $expectedAuth = 'CyberArk'
+
+    $candidatePaths = @(
+      'C:\inetpub\wwwroot\PasswordVault\web.config',
+      'C:\inetpub\wwwroot\PasswordVault\Web.config'
+    )
+
+    $configPath = $candidatePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $configPath) {
+      $configPath = Get-ChildItem -Path 'C:\inetpub\wwwroot' -Filter 'web.config' -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match '\\PasswordVault\\web\.config$' } |
+        Select-Object -First 1 -ExpandProperty FullName
+    }
+
+    if (-not $configPath) {
+      Write-Error 'PVWA web.config was not found under C:\inetpub\wwwroot\PasswordVault'
+      exit 1
+    }
+
+    [xml]$xml = Get-Content -Path $configPath
+
+    if (-not $xml.configuration) {
+      $configurationNode = $xml.CreateElement('configuration')
+      [void]$xml.AppendChild($configurationNode)
+    }
+
+    $appSettings = $xml.configuration.appSettings
+    if (-not $appSettings) {
+      $appSettings = $xml.CreateElement('appSettings')
+      [void]$xml.configuration.AppendChild($appSettings)
+    }
+
+    function Set-AppSettingValue {
+      param(
+        [xml]$Document,
+        [System.Xml.XmlElement]$AppSettingsNode,
+        [string]$Key,
+        [string]$Value
+      )
+
+      $node = $AppSettingsNode.SelectSingleNode("add[@key='$Key']")
+      if (-not $node) {
+        $node = $Document.CreateElement('add')
+        [void]$node.SetAttribute('key', $Key)
+        [void]$node.SetAttribute('value', $Value)
+        [void]$AppSettingsNode.AppendChild($node)
+      }
+      else {
+        [void]$node.SetAttribute('value', $Value)
+      }
+    }
+
+    Set-AppSettingValue -Document $xml -AppSettingsNode $appSettings -Key 'AuthenticationMethods' -Value $expectedAuth
+    Set-AppSettingValue -Document $xml -AppSettingsNode $appSettings -Key 'PVWAAuthenticationList' -Value ($expectedAuth + ';')
+
+    $xml.Save($configPath)
+    Write-Host "Updated PVWA authentication settings in $configPath"
+
+    try {
+      Import-Module WebAdministration -ErrorAction Stop
+      if (Test-Path 'IIS:\AppPools\PasswordVaultWebAccessPool') {
+        Restart-WebAppPool -Name 'PasswordVaultWebAccessPool'
+      }
+      elseif (Get-Service -Name W3SVC -ErrorAction SilentlyContinue) {
+        iisreset /restart | Out-Null
+      }
+    }
+    catch {
+      Write-Host "Warning: failed to recycle IIS after auth-method update: $($_.Exception.Message)"
+    }
+  args:
+    executable: powershell
+

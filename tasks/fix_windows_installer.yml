@@ -1,0 +1,49 @@
+---
+# Remediate "installation is forbidden by system policy" on Windows client SKUs
+# (Windows 10/11 Pro). CyberArk component MSIs are blocked when Windows Installer
+# is disabled by local/group policy or when the msiserver service is disabled.
+
+- name: Ensure Windows Installer (msiserver) service is enabled
+  ansible.windows.win_service:
+    name: msiserver
+    start_mode: manual
+    state: stopped
+  failed_when: false
+  register: msiserver_service
+
+- name: Clear machine-wide "Turn off Windows Installer" policy (DisableMSI)
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer
+    name: DisableMSI
+    data: 0
+    type: dword
+    state: present
+
+- name: Allow elevated install of vendor-signed packages (AlwaysInstallElevated machine)
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer
+    name: AlwaysInstallElevated
+    data: 1
+    type: dword
+    state: present
+
+- name: Allow elevated install of vendor-signed packages (AlwaysInstallElevated user)
+  ansible.windows.win_regedit:
+    path: HKCU:\SOFTWARE\Policies\Microsoft\Windows\Installer
+    name: AlwaysInstallElevated
+    data: 1
+    type: dword
+    state: present
+
+- name: Remove "Disable MSI" restriction under non-policy hive if present
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Installer
+    name: DisableMSI
+    state: absent
+  failed_when: false
+
+- name: Force machine group policy refresh so installer policy applies immediately
+  ansible.windows.win_command: gpupdate /target:computer /force
+  failed_when: false
+  changed_when: false
+

@@ -1,0 +1,216 @@
+---
+# run_pvwa_prerequisites.yml
+#
+# Generic task that runs the appropriate PVWA prerequisites based on OS type:
+# - Windows Server: Runs vendor RunPVWAPrerequisites.ps1 from extracted PVWA package
+# - Windows 11 Client: Runs custom Win11 prerequisite bundle (handled by pvwa_win11_prerequisites.yml)
+#
+# Both with proper execution policy bypass
+
+# ── WINDOWS SERVER: Run vendor prerequisites from PVWA package ─────────────
+
+- name: Ensure PVWA package is extracted before running vendor prerequisites
+  ansible.windows.win_shell: |
+    $zipPath = "{{ pvwa_zip_file_path }}"
+    $extractDir = "C:\Cyberark\packages"
+    
+    if (-not (Test-Path $zipPath)) {
+      Write-Error "PVWA package not found at: $zipPath"
+      exit 1
+    }
+    
+    # Create extraction directory if not exists
+    if (-not (Test-Path $extractDir)) {
+      New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+    }
+    
+    # Check if already extracted (look for PVWA folder with prerequisites)
+    $pvwaFolder = Get-ChildItem -Path $extractDir -Filter "Password Vault Web Access" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($pvwaFolder) {
+      Write-Host "PVWA package already extracted to: $($pvwaFolder.FullName)"
+      exit 0
+    }
+    
+    # Extract the package using PowerShell built-in cmdlet (Win11 has .NET 4.7+ with CompressTools)
+    Write-Host "Extracting PVWA package from: $zipPath"
+    try {
+      # Try Expand-Archive first (PowerShell 5.0+)
+      Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force -ErrorAction Stop
+      Write-Host "PVWA package extracted successfully to: $extractDir"
+      exit 0
+    }
+    catch {
+      # Fallback to COM-based extraction for older PowerShell
+      $shell = New-Object -ComObject Shell.Application
+      $zip = $shell.NameSpace($zipPath)
+      $dest = $shell.NameSpace($extractDir)
+      
+      if ($null -eq $zip) {
+        Write-Error "Failed to open ZIP file: $zipPath"
+        exit 1
+      }
+      
+      Write-Host "Extracting using Shell.Application (fallback method)..."
+      $dest.CopyHere($zip.Items(), 16)  # 16 = do not show progress dialog
+      
+      Start-Sleep -Seconds 2
+      Write-Host "PVWA package extracted successfully"
+      exit 0
+    }
+  args:
+    executable: powershell
+  register: pvwa_package_extract
+  failed_when: false
+  changed_when: "'extracted successfully' in pvwa_package_extract.stdout"
+  when: pvwa_run_prerequisites | bool
+
+- name: Report PVWA package extraction status
+  ansible.builtin.debug:
+    msg: "{{ pvwa_package_extract.stdout }}"
+  when:
+    - pvwa_run_prerequisites | bool
+    - pvwa_package_extract.stdout is defined
+
+- name: Fail if PVWA package extraction failed
+  ansible.builtin.fail:
+    msg: |
+      Failed to extract PVWA package.
+      Exit code: {{ pvwa_package_extract.rc }}
+      Error: {{ pvwa_package_extract.stderr }}
+  when:
+    - pvwa_run_prerequisites | bool
+    - pvwa_package_extract.rc != 0
+
+- name: Locate vendor PVWA prerequisites script in extracted package
+  ansible.windows.win_shell: |
+    # Look for RunPVWAPrerequisites.ps1 in the extracted PVWA package
+    $possiblePaths = @(
+      'C:\Cyberark\packages\Password Vault Web Access\InstallationAutomation\RunPVWAPrerequisites.ps1'
+      'C:\Cyberark\packages\Password Vault Web Access\InstallationAutomation\PVWA_Prerequisites\RunPVWAPrerequisites.ps1'
+    )
+    
+    foreach ($path in $possiblePaths) {
+      if (Test-Path -Path $path) {
+        Write-Output $path
+        exit 0
+      }
+    }
+    
+    # If not found, try to find it recursively
+    $found = Get-ChildItem -Path 'C:\Cyberark\packages' -Filter 'RunPVWAPrerequisites.ps1' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) {
+      Write-Output $found.FullName
+      exit 0
+    }
+    
+    Write-Error "Could not locate RunPVWAPrerequisites.ps1 in PVWA package"
+    exit 1
+  args:
+    executable: powershell
+  register: pvwa_vendor_prereq_script
+  failed_when: false
+  changed_when: "false"
+  when: pvwa_run_prerequisites | bool
+
+- name: Run vendor PVWA prerequisites script on Windows Server
+  ansible.windows.win_shell: |
+    $runnerPath = "{{ pvwa_vendor_prereq_script.stdout | trim }}"
+    
+    if ([string]::IsNullOrWhiteSpace($runnerPath)) {
+      Write-Error "Prerequisite script path is empty"
+      exit 1
+    }
+    
+    if (-not (Test-Path -Path $runnerPath)) {
+      Write-Error "Prerequisite script not found at: $runnerPath"
+      exit 1
+    }
+    
+    Write-Host "Running vendor PVWA prerequisites from: $runnerPath"
+    $runnerDir = Split-Path -Parent $runnerPath
+    
+    Push-Location $runnerDir
+    try {
+      # Run with execution policy bypass, same as Win11 prerequisites
+      Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+      $rawResult = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runnerPath
+      
+      if ($LASTEXITCODE -ne 0) {
+        Write-Error "RunPVWAPrerequisites.ps1 exited with code $LASTEXITCODE"
+        exit $LASTEXITCODE
+      }
+      
+      # Check JSON output if available
+      if ($rawResult) {
+        try {
+          $resultObject = $rawResult | ConvertFrom-Json -ErrorAction Stop
+          if ($resultObject.PSObject.Properties.Name -contains 'isSucceeded' -and [int]$resultObject.isSucceeded -ne 0) {
+            $errorData = ''
+            if ($resultObject.PSObject.Properties.Name -contains 'errorData') {
+              $errorData = $resultObject.errorData
+            }
+            Write-Error "RunPVWAPrerequisites.ps1 reported failure (isSucceeded=$($resultObject.isSucceeded)). $errorData"
+            exit 1
+          }
+          Write-Host "Prerequisites completed: $($resultObject | ConvertTo-Json)"
+        }
+        catch {
+          Write-Host "Prerequisites script output was not JSON; verification skipped based on exit code."
+        }
+      }
+      
+      Write-Output "Vendor PVWA prerequisites completed successfully"
+      exit 0
+    }
+    finally {
+      Pop-Location
+    }
+  args:
+    executable: powershell
+  register: pvwa_vendor_prereq_result
+  failed_when: false
+  changed_when: "'completed successfully' in pvwa_vendor_prereq_result.stdout"
+  when:
+    - pvwa_run_prerequisites | bool
+    - pvwa_vendor_prereq_script.rc == 0
+
+- name: Report vendor PVWA prerequisite script execution
+  ansible.builtin.debug:
+    msg:
+      - "RunPVWAPrerequisites.ps1 executed from: {{ pvwa_vendor_prereq_script.stdout | trim }}"
+      - "Exit code: {{ pvwa_vendor_prereq_result.rc }}"
+      - "Stdout: {{ pvwa_vendor_prereq_result.stdout | default('') | trim }}"
+      - "Stderr: {{ pvwa_vendor_prereq_result.stderr | default('') | trim }}"
+  when: pvwa_run_prerequisites | bool
+
+- name: Report vendor PVWA Prerequisites result
+  ansible.builtin.debug:
+    msg: "{{ pvwa_vendor_prereq_result.stdout_lines }}"
+  when:
+    - pvwa_run_prerequisites | bool
+    - pvwa_vendor_prereq_result.stdout_lines is defined
+
+- name: Fail if vendor PVWA Prerequisites failed
+  ansible.builtin.fail:
+    msg: |
+      Vendor PVWA prerequisites script failed on Windows Server.
+      Exit code: {{ pvwa_vendor_prereq_result.rc }}
+      Stdout: {{ pvwa_vendor_prereq_result.stdout }}
+      Stderr: {{ pvwa_vendor_prereq_result.stderr }}
+  when:
+    - pvwa_run_prerequisites | bool
+    - pvwa_vendor_prereq_result.rc != 0
+
+# ── WINDOWS 11: Already handled by pvwa_win11_prerequisites.yml ────────────
+
+- name: Note about Windows 11 Prerequisites
+  ansible.builtin.debug:
+    msg: |
+      ✓ Windows 11 Client detected
+      ✓ Win11 prerequisites are handled by: pvwa_win11_prerequisites.yml
+      ✓ That task runs the RunPVWAPrerequisites.ps1 from the Win11 bundle with execution policy bypass
+      ✓ This task (run_pvwa_prerequisites.yml) applies only to Windows Server
+  when: pvwa_is_windows11_client | bool
+
+
+

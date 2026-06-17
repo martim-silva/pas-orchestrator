@@ -1,0 +1,99 @@
+2026-06-15 22:15:25,806 p=52524 u=ctw03071 n=ansible WARNING| [WARNING]: No inventory was parsed, only implicit localhost is available
+
+2026-06-15 22:15:25,811 p=52524 u=ctw03071 n=ansible WARNING| [WARNING]: provided hosts list is empty, only localhost is available. Note that the implicit localhost does not match 'all'
+
+2026-06-15 22:15:26,074 p=52524 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: pvwa
+
+2026-06-15 22:15:26,074 p=52524 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: cpm
+
+2026-06-15 22:15:26,074 p=52524 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: psm
+
+2026-06-15 22:15:26,074 p=52524 u=ctw03071 n=ansible INFO| playbook: pas-orchestrator.yml
+2026-06-15 22:19:20,769 p=53413 u=ctw03071 n=ansible WARNING| [WARNING]: No inventory was parsed, only implicit localhost is available
+
+2026-06-15 22:19:20,774 p=53413 u=ctw03071 n=ansible WARNING| [WARNING]: provided hosts list is empty, only localhost is available. Note that the implicit localhost does not match 'all'
+
+2026-06-15 22:19:20,979 p=53413 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: pvwa
+
+2026-06-15 22:19:20,980 p=53413 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: cpm
+
+2026-06-15 22:19:20,980 p=53413 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: psm
+
+2026-06-15 22:19:20,980 p=53413 u=ctw03071 n=ansible INFO| playbook: pas-orchestrator.yml
+2026-06-15 23:00:01,115 p=61853 u=ctw03071 n=ansible WARNING| [WARNING]: No inventory was parsed, only implicit localhost is available
+
+2026-06-15 23:00:01,121 p=61853 u=ctw03071 n=ansible WARNING| [WARNING]: provided hosts list is empty, only localhost is available. Note that the implicit localhost does not match 'all'
+
+2026-06-15 23:00:01,344 p=61853 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: pvwa
+
+2026-06-15 23:00:01,344 p=61853 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: cpm
+
+2026-06-15 23:00:01,345 p=61853 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: psm
+
+2026-06-15 23:00:01,345 p=61853 u=ctw03071 n=ansible INFO| playbook: pas-orchestrator.yml
+2026-06-15 23:01:42,463 p=62205 u=ctw03071 n=ansible WARNING| [WARNING]: No inventory was parsed, only implicit localhost is available
+
+2026-06-15 23:01:42,468 p=62205 u=ctw03071 n=ansible WARNING| [WARNING]: provided hosts list is empty, only localhost is available. Note that the implicit localhost does not match 'all'
+
+2026-06-15 23:01:42,641 p=62205 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: pvwa
+
+2026-06-15 23:01:42,641 p=62205 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: cpm
+
+2026-06-15 23:01:42,641 p=62205 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: psm
+
+2026-06-15 23:01:42,642 p=62205 u=ctw03071 n=ansible INFO| playbook: pas-orchestrator.yml
+2026-06-15 23:05:12,052 p=62912 u=ctw03071 n=ansible WARNING| [WARNING]: No inventory was parsed, only implicit localhost is available
+
+2026-06-15 23:05:12,058 p=62912 u=ctw03071 n=ansible WARNING| [WARNING]: provided hosts list is empty, only localhost is available. Note that the implicit localhost does not match 'all'
+
+2026-06-15 23:05:12,222 p=62912 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: pvwa
+
+2026-06-15 23:05:12,222 p=62912 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: cpm
+
+2026-06-15 23:05:12,222 p=62912 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: psm
+
+2026-06-15 23:05:12,222 p=62912 u=ctw03071 n=ansible INFO| playbook: pas-orchestrator.yml
+2026-06-15 23:10:00,352 p=63971 u=ctw03071 n=ansible WARNING| [WARNING]: No inventory was parsed, only implicit localhost is available
+
+2026-06-15 23:10:00,357 p=63971 u=ctw03071 n=ansible WARNING| [WARNING]: provided hosts list is empty, only localhost is available. Note that the implicit localhost does not match 'all'
+
+2026-06-15 23:10:00,522 p=63971 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: pvwa
+
+2026-06-15 23:10:00,522 p=63971 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: cpm
+
+2026-06-15 23:10:00,522 p=63971 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: psm
+
+2026-06-15 23:10:00,523 p=63971 u=ctw03071 n=ansible INFO| playbook: pas-orchestrator.yml
+2026-06-15 23:41:23,403 p=70034 u=ctw03071 n=ansible WARNING| [WARNING]: No inventory was parsed, only implicit localhost is available
+
+2026-06-15 23:41:23,409 p=70034 u=ctw03071 n=ansible WARNING| [WARNING]: provided hosts list is empty, only localhost is available. Note that the implicit localhost does not match 'all'
+
+2026-06-15 23:41:23,571 p=70034 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: pvwa
+
+2026-06-15 23:41:23,572 p=70034 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: cpm
+
+2026-06-15 23:41:23,572 p=70034 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: psm
+
+2026-06-15 23:41:23,572 p=70034 u=ctw03071 n=ansible INFO| playbook: pas-orchestrator.yml
+2026-06-15 23:54:16,304 p=72700 u=ctw03071 n=ansible WARNING| [WARNING]: No inventory was parsed, only implicit localhost is available
+
+2026-06-15 23:54:16,309 p=72700 u=ctw03071 n=ansible WARNING| [WARNING]: provided hosts list is empty, only localhost is available. Note that the implicit localhost does not match 'all'
+
+2026-06-15 23:54:16,532 p=72700 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: pvwa
+
+2026-06-15 23:54:16,532 p=72700 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: cpm
+
+2026-06-15 23:54:16,532 p=72700 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: psm
+
+2026-06-15 23:54:16,532 p=72700 u=ctw03071 n=ansible INFO| playbook: pas-orchestrator.yml
+2026-06-15 23:57:57,835 p=73504 u=ctw03071 n=ansible WARNING| [WARNING]: No inventory was parsed, only implicit localhost is available
+
+2026-06-15 23:57:57,840 p=73504 u=ctw03071 n=ansible WARNING| [WARNING]: provided hosts list is empty, only localhost is available. Note that the implicit localhost does not match 'all'
+
+2026-06-15 23:57:58,007 p=73504 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: pvwa
+
+2026-06-15 23:57:58,007 p=73504 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: cpm
+
+2026-06-15 23:57:58,007 p=73504 u=ctw03071 n=ansible WARNING| [WARNING]: Could not match supplied host pattern, ignoring: psm
+
+2026-06-15 23:57:58,008 p=73504 u=ctw03071 n=ansible INFO| playbook: pas-orchestrator.yml

@@ -1,28 +1,150 @@
 ---
 
+- name: Detect whether PVWA prerequisite script should run
+  ansible.builtin.set_fact:
+    pvwa_run_prerequisites: >-
+      {{ (ansible_facts.os_product_type | default('') | lower) in ['server', 'domain_controller'] }}
+
+- name: Detect Windows 11 client family for PVWA prerequisite routing
+  ansible.builtin.set_fact:
+    pvwa_is_windows11_client: >-
+      {{
+        (not (pvwa_run_prerequisites | bool)) and
+        (
+          'windows 11' in (
+            (
+              (ansible_facts.os_name | default('')) ~ ' ' ~
+              (ansible_facts.distribution | default('')) ~ ' ' ~
+              (ansible_facts.product_name | default(''))
+            ) | lower
+          )
+        )
+      }}
+
+- name: Remediate Windows Installer system policy (Windows client SKUs)
+  ansible.builtin.include_tasks: fix_windows_installer.yml
+  when: not pvwa_run_prerequisites | bool
+
+- name: Run Win11 PVWA prerequisite bundle from Nexus (Windows 11 client SKUs)
+  ansible.builtin.include_tasks: pvwa_win11_prerequisites.yml
+  when: pvwa_is_windows11_client | bool
+
+- name: Check pending reboot state after Win11 prerequisite bundle
+  ansible.windows.win_shell: |
+    $rebootRequired = $false
+
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
+      $rebootRequired = $true
+    }
+
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') {
+      $rebootRequired = $true
+    }
+
+    $pfro = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations
+    if ($pfro -and $pfro.Count -gt 0) {
+      $rebootRequired = $true
+    }
+
+    if ($rebootRequired) { exit 1 } else { exit 0 }
+  args:
+    executable: powershell
+  register: pvwa_win11_prereq_reboot_check
+  failed_when: false
+  changed_when: false
+  when: pvwa_is_windows11_client | bool
+
+- name: Reboot host when Win11 prerequisite bundle leaves pending reboot state
+  ansible.windows.win_reboot:
+    reboot_timeout: 1800
+    msg: "Rebooting after Win11 PVWA prerequisite bundle before PVWA installation"
+  when:
+    - pvwa_is_windows11_client | bool
+    - pvwa_win11_prereq_reboot_check is defined
+    - pvwa_win11_prereq_reboot_check.rc == 1
+
+- name: Stop when host is client SKU but not Windows 11
+  ansible.builtin.fail:
+    msg: >-
+      PVWA client-SKU automation now expects a Windows 11 family host.
+      Detected non-server host that is not Windows 11.
+      Use Windows Server for vendor server prerequisites or Windows 11 for the Win11 prerequisite bundle.
+  when:
+    - not pvwa_run_prerequisites | bool
+    - not pvwa_is_windows11_client | bool
+
+# ── Run PVWA Prerequisites (Generic logic for Windows Server & Win11) ──────
+- name: Run PVWA Prerequisites based on OS type
+  ansible.builtin.include_tasks: run_pvwa_prerequisites.yml
+
+- name: Ensure IIS HTTPS binding exists on the Default Web Site
+  ansible.builtin.include_tasks: configure_pvwa_https_binding.yml
+
+- name: Stop lingering msiexec processes that lock the PVWA MSI
+  ansible.windows.win_shell: |
+    Get-Process msiexec -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    exit 0
+  failed_when: false
+  changed_when: false
+
+- name: Remove stale PVWA extraction folder so re-extract is not blocked
+  ansible.windows.win_file:
+    path: C:\Cyberark\packages\Password Vault Web Access
+    state: absent
+  register: pvwa_stale_cleanup
+  retries: 5
+  delay: 6
+  until: pvwa_stale_cleanup is succeeded
+
 - name: PVWA Role Block
+  ignore_unreachable: true
   block:
 
-    - include_role:
+    - name: PVWA role - first pass (installer may recycle IIS/WinRM or reboot)
+      ansible.builtin.include_role:
         name: pvwa
-      vars:
-        - pvwa_extract: true
-        - pvwa_prerequisites: true
-        - pvwa_install: true
-        - pvwa_postinstall: true
-        - pvwa_hardening: true
-        - pvwa_registration: false
-        - pvwa_official: false
+      vars: &pvwa_role_vars
+        pvwa_extract: true
+        pvwa_prerequisites: "{{ pvwa_run_prerequisites | bool }}"
+        pvwa_install: true
+        pvwa_postinstall: true
+        pvwa_hardening: false
+        pvwa_registration: true
+        pvwa_official: false
+        pvwa_ignore_checksum: true
+
+    - name: Wait for WinRM to recover after PVWA installer recycle/reboot
+      ansible.builtin.wait_for_connection:
+        delay: 20
+        sleep: 10
+        timeout: 1200
+
+    - name: PVWA role - second pass (resume post-install/registration after reconnect)
+      ansible.builtin.include_role:
+        name: pvwa
+      vars: *pvwa_role_vars
 
   rescue:
 
-    - include_role:
+    - name: Wait for WinRM to recover before PVWA rescue retry
+      ansible.builtin.wait_for_connection:
+        delay: 20
+        sleep: 10
+        timeout: 1200
+
+    - name: PVWA role - rescue pass (complete install/postinstall after reconnect)
+      ansible.builtin.include_role:
         name: pvwa
       vars:
-        - pvwa_extract: true
-        - pvwa_prerequisites: true
-        - pvwa_install: true
-        - pvwa_postinstall: true
-        - pvwa_hardening: true
-        - pvwa_registration: false
-        - pvwa_official: false
+        pvwa_extract: true
+        pvwa_prerequisites: "{{ pvwa_run_prerequisites | bool }}"
+        pvwa_install: true
+        pvwa_postinstall: true
+        pvwa_hardening: false
+        pvwa_registration: true
+        pvwa_official: false
+        pvwa_ignore_checksum: true
+
+- name: Ensure PVWA authentication methods are configured in web.config
+  ansible.builtin.include_tasks: ensure_pvwa_auth_methods.yml
+

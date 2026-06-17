@@ -4,4 +4,4 @@
   include_role:
     name: pvwa
   vars:
-    - pvwa_registration: true
+    pvwa_registration: true
