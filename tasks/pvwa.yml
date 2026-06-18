@@ -26,7 +26,7 @@
   when: not pvwa_run_prerequisites | bool
 
 - name: Run Win11 PVWA prerequisite bundle from Nexus (Windows 11 client SKUs)
-  ansible.builtin.include_tasks: pvwa_win11_prerequisites.yml
+  ansible.builtin.include_tasks: pvwa_preinstall_win11.yml
   when: pvwa_is_windows11_client | bool
 
 - name: Check pending reboot state after Win11 prerequisite bundle

@@ -1,0 +1,115 @@
+---
+
+- name: Run shared Win11 .NET and VC++ prerequisites
+  ansible.builtin.include_tasks: win11_dotnet_cpp_prereqs.yml
+
+- name: Locate RunPVWAPrerequisites.ps1 inside extracted bundle
+  ansible.windows.win_shell: |
+    $runner = Get-ChildItem -Path 'C:\Cyberark\packages\PVWA_Prerequisites_Win11' -Filter 'RunPVWAPrerequisites.ps1' -Recurse -File | Select-Object -First 1
+    if (-not $runner) { Write-Error 'RunPVWAPrerequisites.ps1 was not found in PVWA_Prerequisites_Win11.zip'; exit 1 }
+    Write-Output $runner.FullName
+  args:
+    executable: powershell
+  register: pvwa_win11_prereq_runner
+  changed_when: false
+
+- name: Ensure NuGet package provider is installed
+  ansible.windows.win_shell: |
+    if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue)) {
+      Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+    }
+    Write-Output 'NuGet provider ready'
+  args:
+    executable: powershell
+
+- name: Ensure IISAdministration PowerShell module is installed
+  ansible.windows.win_shell: |
+    $mod = Get-Module -Name IISAdministration -ListAvailable -ErrorAction SilentlyContinue
+    if (-not $mod) {
+      Install-Module -Name IISAdministration -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop | Out-Null
+      Write-Output 'IISAdministration installed'
+    } else {
+      Write-Output "IISAdministration already present (version: $($mod[0].Version))"
+    }
+  args:
+    executable: powershell
+  register: iisadmin_install
+  changed_when: '"installed" in (iisadmin_install.stdout | default(""))'
+
+- name: Import IISAdministration module to verify it loads correctly
+  ansible.windows.win_shell: |
+    Import-Module IISAdministration -ErrorAction Stop
+    $ver = (Get-Module IISAdministration).Version
+    Write-Output "IISAdministration $ver loaded OK"
+  args:
+    executable: powershell
+
+- name: Pre-enable IIS features for Win11 before vendor prerequisite execution
+  ansible.builtin.include_tasks: pvwa_iis_features.yml
+
+- name: Disable known-problematic steps in bundled Win11 prerequisite config
+  ansible.windows.win_shell: |
+    $runnerPath = "{{ pvwa_win11_prereq_runner.stdout | trim }}"
+    if ([string]::IsNullOrWhiteSpace($runnerPath)) { Write-Error 'Resolved prerequisite runner path is empty'; exit 1 }
+    $configPath = Join-Path (Split-Path -Parent $runnerPath) 'PVWA_Prerequisites_Config.xml'
+    if (-not (Test-Path $configPath)) { Write-Error "Configuration file not found: $configPath"; exit 1 }
+    [xml]$xml = Get-Content -Path $configPath
+    foreach ($step in $xml.Stage.Step) { if (@('PVWA_Install_Redistributable','PVWA_InstallWebServerRoles') -contains [string]$step.Name) { $step.Enable = 'No' } }
+    $xml.Save($configPath)
+    Write-Host "Patched prerequisite config at $configPath"
+  args:
+    executable: powershell
+
+- name: Patch extracted Win11 IIS verification module helper name typo
+  ansible.windows.win_shell: |
+    $runnerPath = "{{ pvwa_win11_prereq_runner.stdout | trim }}"
+    if ([string]::IsNullOrWhiteSpace($runnerPath)) { Write-Error 'Resolved prerequisite runner path is empty'; exit 1 }
+    $verifyModule = Get-ChildItem -Path (Split-Path -Parent $runnerPath) -Filter 'PVWA_Verify_IIS_Settings.psm1' -Recurse -File | Select-Object -First 1
+    if (-not $verifyModule) { Write-Host 'PVWA_Verify_IIS_Settings.psm1 not found in extracted bundle'; exit 0 }
+    $content = Get-Content -Path $verifyModule.FullName -Raw
+    $updated = $content -replace 'GetRegistryValue', 'GetRegisrtyValue'
+    if ($updated -ne $content) { Set-Content -Path $verifyModule.FullName -Value $updated -Encoding UTF8 }
+  args:
+    executable: powershell
+
+- name: Execute vendor Win11 PVWA prerequisites script
+  ansible.windows.win_shell: |
+    $runnerPath = "{{ pvwa_win11_prereq_runner.stdout | trim }}"
+    if ([string]::IsNullOrWhiteSpace($runnerPath)) { Write-Error 'Resolved prerequisite runner path is empty'; exit 1 }
+    $runnerDir = Split-Path -Parent $runnerPath
+    Push-Location $runnerDir
+    try {
+      Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+      $rawResult = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runnerPath
+      if ($LASTEXITCODE -ne 0) { Write-Error "RunPVWAPrerequisites.ps1 exited with code $LASTEXITCODE"; exit $LASTEXITCODE }
+      if ($rawResult) {
+        try {
+          $resultObject = $rawResult | ConvertFrom-Json -ErrorAction Stop
+          if ($resultObject.PSObject.Properties.Name -contains 'isSucceeded' -and [int]$resultObject.isSucceeded -ne 0) {
+            $errorData = ''
+            if ($resultObject.PSObject.Properties.Name -contains 'errorData') { $errorData = $resultObject.errorData }
+            Write-Error "RunPVWAPrerequisites.ps1 reported failure (isSucceeded=$($resultObject.isSucceeded)). $errorData"
+            exit 1
+          }
+        } catch {
+          Write-Host 'Prerequisites script output was not JSON; continuing based on exit code.'
+        }
+      }
+    } finally {
+      Pop-Location
+    }
+  args:
+    executable: powershell
+  register: pvwa_win11_prereq_exec_result
+  changed_when: false
+
+- name: Report Win11 PVWA prerequisite script execution
+  ansible.builtin.debug:
+    msg:
+      - "RunPVWAPrerequisites.ps1 executed from: {{ pvwa_win11_prereq_runner.stdout | trim }}"
+      - "Exit code: {{ pvwa_win11_prereq_exec_result.rc }}"
+      - "Stdout: {{ pvwa_win11_prereq_exec_result.stdout | default('') | trim }}"
+      - "Stderr: {{ pvwa_win11_prereq_exec_result.stderr | default('') | trim }}"
+
+
+

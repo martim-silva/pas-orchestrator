@@ -3,7 +3,7 @@
 #
 # Generic task that runs the appropriate PVWA prerequisites based on OS type:
 # - Windows Server: Runs vendor RunPVWAPrerequisites.ps1 from extracted PVWA package
-# - Windows 11 Client: Runs custom Win11 prerequisite bundle (handled by pvwa_win11_prerequisites.yml)
+# - Windows 11 Client: Runs custom Win11 prerequisite bundle (handled by pvwa_preinstall_win11.yml)
 #
 # Both with proper execution policy bypass
 
@@ -201,13 +201,13 @@
     - pvwa_run_prerequisites | bool
     - pvwa_vendor_prereq_result.rc != 0
 
-# ── WINDOWS 11: Already handled by pvwa_win11_prerequisites.yml ────────────
+# ── WINDOWS 11: Already handled by pvwa_preinstall_win11.yml ───────────────
 
 - name: Note about Windows 11 Prerequisites
   ansible.builtin.debug:
     msg: |
       ✓ Windows 11 Client detected
-      ✓ Win11 prerequisites are handled by: pvwa_win11_prerequisites.yml
+      ✓ Win11 prerequisites are handled by: pvwa_preinstall_win11.yml
       ✓ That task runs the RunPVWAPrerequisites.ps1 from the Win11 bundle with execution policy bypass
       ✓ This task (run_pvwa_prerequisites.yml) applies only to Windows Server
   when: pvwa_is_windows11_client | bool

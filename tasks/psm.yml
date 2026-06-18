@@ -1,7 +1,5 @@
 ---
 
-- name: Import PVWA SSL certificate into PSM
-  ansible.builtin.include_tasks: import_pvwa_certificate.yml
 
 - include_role:
     name: psm

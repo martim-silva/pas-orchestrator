@@ -13,7 +13,8 @@
 #     * PVWA_Verify_IIS_Settings    -> Get-WindowsFeature Web-Server
 #   Those cmdlets do not exist on client SKUs, so the whole prerequisites stage
 #   fails. Our flow therefore enables IIS via DISM/win_optional_feature
-#   (enable_iis.yml) and reproduces the still-required cert + HTTPS binding here.
+#   (windows_iis_features.yml / pvwa_iis_features.yml) and reproduces the
+#   still-required cert + HTTPS binding here.
 #
 #   The CyberArk PVWA installer aborts with:
 #     "https binding is not configured for website (Default Web Site)
@@ -53,7 +54,7 @@
       # The Default Web Site must exist before we can bind HTTPS to it.
       $site = Get-Item "IIS:\Sites\$SiteName" -ErrorAction SilentlyContinue
       if (-not $site) {
-        throw "IIS site '$SiteName' was not found. Ensure IIS and the Default Web Site are installed (enable_iis.yml) before configuring the HTTPS binding."
+        throw "IIS site '$SiteName' was not found. Ensure IIS and the Default Web Site are installed (windows_iis_features.yml) before configuring the HTTPS binding."
       }
 
       # Reuse a valid self-signed certificate for this DnsHost, otherwise create

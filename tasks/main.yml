@@ -52,8 +52,13 @@
 
   tasks:
 
-    - name: Enable IIS prerequisites on component hosts
-      include_tasks: enable_iis.yml
+    - name: Enable IIS prerequisites on PVWA hosts only
+      include_tasks: pvwa_iis_features.yml
+      when: "'pvwa' in group_names"
+
+    - name: Enable .NET-only prerequisites on CPM/PSM hosts
+      include_tasks: win11_dotnet_prereqs.yml
+      when: "'cpm' in group_names or 'psm' in group_names"
 
     - include_tasks: cpm.yml
       when: "'cpm' in group_names"

@@ -1,0 +1,5 @@
+---
+
+# PVWA-specific alias for shared IIS feature enablement.
+- name: Include shared Windows IIS feature enablement for PVWA
+  ansible.builtin.include_tasks: windows_iis_features.yml

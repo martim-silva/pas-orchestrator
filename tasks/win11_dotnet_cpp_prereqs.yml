@@ -1,0 +1,115 @@
+---
+
+- name: Resolve Win11 prerequisite artifact URL from environment
+  ansible.builtin.set_fact:
+    win11_prereq_zip_url: >-
+      {{
+        (
+          (lookup('env', 'NEXUS_BASE_URL') | default('http://nexus.localhost/repository/mhs-software', true))
+          | regex_replace('/+$', '')
+        )
+        ~ '/'
+        ~
+        (
+          lookup('env', 'NEXUS_PVWA_WIN11_PREREQ_ARTIFACT')
+          | default('cyberark/PVWA_Prerequisites_Win11.zip', true)
+          | regex_replace('^/+', '')
+        )
+      }}
+
+- name: Resolve optional Nexus credentials for Win11 prerequisite download
+  ansible.builtin.set_fact:
+    win11_prereq_nexus_username: "{{ lookup('env', 'NEXUS_USERNAME') | default('', true) }}"
+    win11_prereq_nexus_password: "{{ lookup('env', 'NEXUS_PASSWORD') | default('', true) }}"
+
+- name: Ensure CyberArk package workspace exists
+  ansible.windows.win_file:
+    path: C:\Cyberark\packages
+    state: directory
+
+- name: Check whether Win11 prerequisite ZIP was already staged on host
+  ansible.windows.win_stat:
+    path: C:\tmp\pas_packages\PVWA_Prerequisites_Win11.zip
+  register: win11_prereq_staged_zip
+
+- name: Reuse staged PVWA Win11 prerequisites bundle
+  ansible.windows.win_copy:
+    src: C:\tmp\pas_packages\PVWA_Prerequisites_Win11.zip
+    dest: C:\Cyberark\packages\PVWA_Prerequisites_Win11.zip
+    remote_src: true
+    force: true
+  when: win11_prereq_staged_zip.stat.exists | default(false)
+
+- name: Download PVWA Win11 prerequisites bundle from Nexus when not already staged
+  ansible.windows.win_get_url:
+    url: "{{ win11_prereq_zip_url }}"
+    dest: C:\Cyberark\packages\PVWA_Prerequisites_Win11.zip
+    force: true
+    url_username: "{{ win11_prereq_nexus_username if (win11_prereq_nexus_username | length > 0) else omit }}"
+    url_password: "{{ win11_prereq_nexus_password if (win11_prereq_nexus_password | length > 0) else omit }}"
+  when: not (win11_prereq_staged_zip.stat.exists | default(false))
+
+- name: Reset extracted Win11 prerequisites folder before unzip
+  ansible.windows.win_file:
+    path: C:\Cyberark\packages\PVWA_Prerequisites_Win11
+    state: absent
+
+- name: Extract PVWA Win11 prerequisites bundle
+  community.windows.win_unzip:
+    src: C:\Cyberark\packages\PVWA_Prerequisites_Win11.zip
+    dest: C:\Cyberark\packages\PVWA_Prerequisites_Win11
+
+- name: Enable legacy .NET 3.5 / WCF features
+  ansible.windows.win_optional_feature:
+    name: "{{ item }}"
+    state: present
+    include_parent: true
+  loop:
+    - WCF-Services45
+    - WCF-HTTP-Activation45
+    - WCF-TCP-Activation45
+    - WCF-TCP-PortSharing45
+  loop_control:
+    label: "{{ item }}"
+  ignore_errors: true
+  register: dotnet_legacy_result
+
+- name: Enable .NET 4.x extended ASP.NET features
+  ansible.windows.win_optional_feature:
+    name: "{{ item }}"
+    state: present
+    include_parent: true
+  loop:
+    - NetFx4Extended-ASPNET45
+  loop_control:
+    label: "{{ item }}"
+  ignore_errors: true
+  register: dotnet45_result
+
+- name: Install bundled VC++ redistributables from Win11 prerequisite bundle
+  ansible.windows.win_shell: |
+    $bundleRoot = 'C:\Cyberark\packages\PVWA_Prerequisites_Win11'
+    $allowedExitCodes = @(0, 1638, 3010)
+
+    $installers = @(
+      Get-ChildItem -Path $bundleRoot -Filter 'vcredist_x86.exe' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+      Get-ChildItem -Path $bundleRoot -Filter 'vcredist_x64.exe' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    )
+
+    foreach ($installer in $installers) {
+      if (-not $installer) {
+        continue
+      }
+
+      Write-Host "Running $($installer.FullName) /quiet /norestart"
+      $p = Start-Process -FilePath $installer.FullName -ArgumentList '/quiet', '/norestart' -Wait -PassThru
+      if ($allowedExitCodes -notcontains $p.ExitCode) {
+        Write-Error "Installer failed: $($installer.FullName) exited with code $($p.ExitCode)"
+        exit $p.ExitCode
+      }
+    }
+
+    exit 0
+  args:
+    executable: powershell
+

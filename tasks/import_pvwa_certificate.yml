@@ -7,7 +7,7 @@
 # The certificate is retrieved from the PVWA host and imported into both the
 # personal and root certificate stores.
 
-- name: Resolve PVWA certificate source metadata from hostvars
+- name: Resolve PVWA certificate source host and preferred export path
   ansible.builtin.set_fact:
     pvwa_cert_source_host: "{{ groups['pvwa'][0] }}"
     pvwa_cert_source_export_path: >-
@@ -15,20 +15,111 @@
         hostvars[groups['pvwa'][0]]['pvwa_certificate_export_path']
         | default('C:\\Cyberark\\certs\\pvwa-cert.pem')
       }}
-    pvwa_cert_source_thumbprint: >-
-      {{
-        hostvars[groups['pvwa'][0]]['pvwa_certificate_thumbprint']
-        | default('')
-      }}
   when:
     - groups['pvwa'] is defined
     - groups['pvwa'] | length > 0
 
+- name: Discover current PVWA certificate metadata and ensure PEM export exists
+  ansible.windows.win_powershell:
+    parameters:
+      HttpsPort: "{{ pvwa_iis_https_port | default(443) | int }}"
+      ExportPath: "{{ pvwa_cert_source_export_path }}"
+    script: |
+      param(
+        [int]    $HttpsPort,
+        [string] $ExportPath
+      )
+
+      $ErrorActionPreference = 'Stop'
+      $Ansible.Changed = $false
+
+      $cert = $null
+      $certThumbprint = ''
+
+      if (Test-Path -Path $ExportPath) {
+        try {
+          $pemContent = Get-Content -Path $ExportPath -Raw
+          $pemBase64 = ($pemContent -replace '-----BEGIN CERTIFICATE-----', '' -replace '-----END CERTIFICATE-----', '' -replace '\s', '')
+          $rawBytes = [System.Convert]::FromBase64String($pemBase64)
+          $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawBytes)
+          $certThumbprint = $cert.Thumbprint
+        }
+        catch {
+          $cert = $null
+          $certThumbprint = ''
+        }
+      }
+
+      if (-not $cert) {
+        $sslBindingOutput = (& netsh http show sslcert ipport=0.0.0.0:$HttpsPort 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0) {
+          throw "No PVWA certificate export was found at $ExportPath and no HTTP.SYS SSL binding was found on 0.0.0.0:$HttpsPort. Standalone CPM/PSM provisioning only imports an existing PVWA certificate; it does not create one. Run ./workflow.sh --provision-pvwa (or ./workflow.sh --provision-components) first, then retry. netsh output: $sslBindingOutput"
+        }
+
+        $thumbprintMatch = [regex]::Match($sslBindingOutput, 'Certificate Hash\s*:\s*([A-Fa-f0-9]+)')
+        if (-not $thumbprintMatch.Success) {
+          throw "Unable to parse the PVWA certificate thumbprint from the existing HTTP.SYS SSL binding on port $HttpsPort. netsh output: $sslBindingOutput"
+        }
+
+        $certThumbprint = $thumbprintMatch.Groups[1].Value
+        if ([string]::IsNullOrWhiteSpace($certThumbprint)) {
+          throw "The PVWA HTTP.SYS SSL binding on port $HttpsPort does not expose a certificate thumbprint."
+        }
+
+        $cert = Get-ChildItem -Path 'Cert:\LocalMachine\My' |
+          Where-Object { $_.Thumbprint -eq $certThumbprint } |
+          Select-Object -First 1
+      }
+
+      if (-not $cert) {
+        throw "Certificate with thumbprint $certThumbprint was not found in LocalMachine\My on the PVWA host."
+      }
+
+      $exportDir = Split-Path -Path $ExportPath
+      if (-not (Test-Path -Path $exportDir)) {
+        New-Item -ItemType Directory -Path $exportDir -Force | Out-Null
+        $Ansible.Changed = $true
+      }
+
+      $pemContent = @(
+        '-----BEGIN CERTIFICATE-----'
+        [System.Convert]::ToBase64String($cert.RawData, 'InsertLineBreaks')
+        '-----END CERTIFICATE-----'
+      ) -join [Environment]::NewLine
+
+      $existingPemContent = ''
+      if (Test-Path -Path $ExportPath) {
+        $existingPemContent = Get-Content -Path $ExportPath -Raw
+      }
+
+      if ($existingPemContent -ne $pemContent) {
+        $pemContent | Out-File -FilePath $ExportPath -Encoding ASCII -Force
+        $Ansible.Changed = $true
+      }
+
+      $Ansible.Result = @{
+        export_path     = $ExportPath
+        cert_thumbprint = $cert.Thumbprint
+        cert_subject    = $cert.Subject
+      }
+  register: pvwa_cert_metadata
+  delegate_to: "{{ pvwa_cert_source_host }}"
+  when: pvwa_cert_source_host is defined
+
+- name: Store resolved PVWA certificate metadata for import
+  ansible.builtin.set_fact:
+    pvwa_cert_source_export_path: "{{ pvwa_cert_metadata.result.export_path }}"
+    pvwa_cert_source_thumbprint: "{{ pvwa_cert_metadata.result.cert_thumbprint }}"
+    pvwa_cert_source_subject: "{{ pvwa_cert_metadata.result.cert_subject }}"
+  when: pvwa_cert_metadata is succeeded
+
 - name: Fail when PVWA certificate metadata is unavailable
   ansible.builtin.fail:
     msg: >-
-      PVWA certificate metadata is unavailable. Ensure the PVWA provisioning-side
-      certificate task completed successfully before importing into {{ inventory_hostname }}.
+      PVWA certificate metadata is unavailable for {{ inventory_hostname }}.
+      Standalone CPM/PSM provisioning only imports an existing PVWA certificate;
+      it does not create one. Run `./workflow.sh --provision-pvwa` (or
+      `./workflow.sh --provision-components`) first, then retry.
   when:
     - pvwa_cert_source_host is not defined
       or (pvwa_cert_source_thumbprint | default('') | length == 0)
@@ -47,7 +138,6 @@
     executable: powershell
   register: pvwa_cert_content_raw
   delegate_to: "{{ pvwa_cert_source_host }}"
-  run_once: yes
   when: pvwa_cert_source_host is defined
 
 - name: Fail when PVWA certificate content is unavailable for import
@@ -55,7 +145,9 @@
     msg: >-
       PVWA certificate export was not readable from {{ pvwa_cert_source_host }} at
       {{ pvwa_cert_source_export_path }}.
-      Ensure PVWA certificate provisioning ran successfully first.
+      Standalone CPM/PSM provisioning only imports an existing PVWA certificate;
+      it does not create one. Run `./workflow.sh --provision-pvwa` (or
+      `./workflow.sh --provision-components`) first, then retry.
   when:
     - pvwa_cert_content_raw is not defined or pvwa_cert_content_raw.rc != 0 or (pvwa_cert_content_raw.stdout | default('') | length == 0)
 

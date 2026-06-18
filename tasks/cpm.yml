@@ -1,7 +1,5 @@
 ---
 
-- name: Import PVWA SSL certificate into CPM
-  ansible.builtin.include_tasks: import_pvwa_certificate.yml
 
 - include_role:
     name: cpm

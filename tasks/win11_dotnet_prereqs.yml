@@ -1,0 +1,29 @@
+---
+
+- name: Enable legacy .NET 3.5 / WCF features
+  ansible.windows.win_optional_feature:
+    name: "{{ item }}"
+    state: present
+    include_parent: true
+  loop:
+    - WCF-Services45
+    - WCF-HTTP-Activation45
+    - WCF-TCP-Activation45
+    - WCF-TCP-PortSharing45
+  loop_control:
+    label: "{{ item }}"
+  ignore_errors: true
+  register: dotnet_legacy_result
+
+- name: Enable .NET 4.x extended ASP.NET features
+  ansible.windows.win_optional_feature:
+    name: "{{ item }}"
+    state: present
+    include_parent: true
+  loop:
+    - NetFx4Extended-ASPNET45
+  loop_control:
+    label: "{{ item }}"
+  ignore_errors: true
+  register: dotnet45_result
+
